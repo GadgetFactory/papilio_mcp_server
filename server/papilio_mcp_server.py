@@ -721,15 +721,15 @@ def handle_tools_list(request_id):
         },
         {
             "name": "set_video_mode",
-            "description": "Set the FPGA video output mode. Modes: 0=Color bars, 1=Grid, 2=Grayscale, 3=Text mode (80x26), 4=Framebuffer (160x120).",
+            "description": "Set the FPGA video output mode. Modes: 0=Test pattern (color bars, grid, grayscale), 1=Text mode (80x26), 2=Framebuffer (160x120).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "mode": {
                         "type": "integer",
-                        "description": "Video mode (0-4): 0=Color bars, 1=Grid, 2=Grayscale, 3=Text, 4=Framebuffer",
+                        "description": "Video mode (0-2): 0=Test pattern, 1=Text mode, 2=Framebuffer",
                         "minimum": 0,
-                        "maximum": 4
+                        "maximum": 2
                     }
                 },
                 "required": ["mode"]
@@ -1058,49 +1058,49 @@ def handle_tools_call(request_id, params):
         
         # Video mode control tools
         elif tool_name == "set_video_mode":
-            mode = arguments.get("mode", 4)
-            # Video mode register is at 0x8000
-            result = controller.wishbone_write(0x8000, mode)
-            mode_names = {0: "Color bars", 1: "Grid", 2: "Grayscale", 3: "Text mode", 4: "Framebuffer"}
+            mode = arguments.get("mode", 0)
+            # Video mode register is at 0x0000 (modular architecture)
+            result = controller.wishbone_write(0x0000, mode)
+            mode_names = {0: "Test pattern", 1: "Text mode", 2: "Framebuffer"}
             content = f"Set video mode to {mode} ({mode_names.get(mode, 'Unknown')})"
             
         elif tool_name == "get_video_mode":
-            mode = controller.wishbone_read(0x8000) & 0x07
-            mode_names = {0: "Color bars", 1: "Grid", 2: "Grayscale", 3: "Text mode", 4: "Framebuffer"}
+            mode = controller.wishbone_read(0x0000) & 0x03
+            mode_names = {0: "Test pattern", 1: "Text mode", 2: "Framebuffer"}
             content = f"Video mode: {mode} ({mode_names.get(mode, 'Unknown')})"
         
-        # Text mode tools
+        # Text mode tools (addresses 0x0020-0x00FF in modular architecture)
         elif tool_name == "text_clear":
             # Set cursor to 0,0
-            controller.wishbone_write(0x8021, 0)  # cursor_x
-            controller.wishbone_write(0x8022, 0)  # cursor_y
-            # Fill with spaces (80x30 = 2400 characters)
-            controller.wishbone_write(0x8023, 0x0F)  # White on black
-            for i in range(2400):
-                controller.wishbone_write(0x8024, 0x20)  # Space character
+            controller.wishbone_write(0x0021, 0)  # cursor_x
+            controller.wishbone_write(0x0022, 0)  # cursor_y
+            # Fill with spaces (80x26 = 2080 characters)
+            controller.wishbone_write(0x0023, 0x0F)  # White on black
+            for i in range(2080):
+                controller.wishbone_write(0x0024, 0x20)  # Space character
             # Reset cursor
-            controller.wishbone_write(0x8021, 0)
-            controller.wishbone_write(0x8022, 0)
+            controller.wishbone_write(0x0021, 0)
+            controller.wishbone_write(0x0022, 0)
             content = "Text screen cleared"
             
         elif tool_name == "text_set_cursor":
             x = arguments.get("x", 0)
             y = arguments.get("y", 0)
-            controller.wishbone_write(0x8021, x & 0x7F)  # cursor_x
-            controller.wishbone_write(0x8022, y & 0x1F)  # cursor_y
+            controller.wishbone_write(0x0021, x & 0x7F)  # cursor_x
+            controller.wishbone_write(0x0022, y & 0x1F)  # cursor_y
             content = f"Cursor set to ({x}, {y})"
             
         elif tool_name == "text_set_color":
             fg = arguments.get("foreground", 15)
             bg = arguments.get("background", 0)
             attr = ((bg & 0x0F) << 4) | (fg & 0x0F)
-            controller.wishbone_write(0x8023, attr)  # default_attr
+            controller.wishbone_write(0x0023, attr)  # default_attr
             content = f"Text color set to fg={fg}, bg={bg} (attr=0x{attr:02X})"
             
         elif tool_name == "text_write":
             text = arguments.get("text", "")
             for ch in text:
-                controller.wishbone_write(0x8024, ord(ch) & 0xFF)
+                controller.wishbone_write(0x0024, ord(ch) & 0xFF)
             content = f"Wrote {len(text)} characters"
             
         elif tool_name == "text_write_at":
@@ -1110,14 +1110,14 @@ def handle_tools_call(request_id, params):
             fg = arguments.get("foreground", 15)
             bg = arguments.get("background", 0)
             # Set position
-            controller.wishbone_write(0x8021, x & 0x7F)
-            controller.wishbone_write(0x8022, y & 0x1F)
+            controller.wishbone_write(0x0021, x & 0x7F)
+            controller.wishbone_write(0x0022, y & 0x1F)
             # Set color
             attr = ((bg & 0x0F) << 4) | (fg & 0x0F)
-            controller.wishbone_write(0x8023, attr)
+            controller.wishbone_write(0x0023, attr)
             # Write characters
             for ch in text:
-                controller.wishbone_write(0x8024, ord(ch) & 0xFF)
+                controller.wishbone_write(0x0024, ord(ch) & 0xFF)
             content = f"Wrote '{text}' at ({x}, {y}) with fg={fg}, bg={bg}"
         
         else:
