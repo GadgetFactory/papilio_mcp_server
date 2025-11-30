@@ -1,0 +1,18 @@
+{
+  "name": "papilio_mcp_server",
+  "version": "1.0.0",
+  "description": "MCP server for controlling Papilio Arcade FPGA board via Model Context Protocol",
+  "keywords": ["mcp", "fpga", "papilio", "arcade", "copilot"],
+  "authors": [
+    {
+      "name": "Gadget Factory"
+    }
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/GadgetFactory/papilio_development.git"
+  },
+  "frameworks": "*",
+  "platforms": "*"
+}
