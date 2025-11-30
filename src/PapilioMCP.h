@@ -26,6 +26,12 @@
     D             - Dump debug registers
     J [1|0]       - Enable/disable JTAG bridge
     P [1|0]       - Pause/resume sketch (MCP takes full control)
+    C             - Continue from breakpoint
+    B [1|0]       - Enable/disable breakpoints globally
+  
+  Breakpoints:
+    Add PapilioMCP.breakpoint("name") in your sketch to pause at that point.
+    Use 'C' command to continue, or 'B 0' to disable all breakpoints.
 */
 
 #ifndef PAPILIO_MCP_H
@@ -92,6 +98,12 @@ public:
   void pause();
   void resume();
   bool isPaused() { return _paused; }
+  
+  // Breakpoint support
+  void breakpoint(const char* name = nullptr);
+  void enableBreakpoints() { _breakpointsEnabled = true; }
+  void disableBreakpoints() { _breakpointsEnabled = false; }
+  bool areBreakpointsEnabled() { return _breakpointsEnabled; }
 
 private:
   SPIClass* _spi = nullptr;
@@ -99,6 +111,9 @@ private:
   String _cmdBuffer;
   bool _jtagEnabled = false;
   bool _paused = false;
+  bool _breakpointsEnabled = true;
+  bool _atBreakpoint = false;
+  uint16_t _breakpointCount = 0;
   
   void processCommand(String cmd);
   void sendResponse(const char* response);
@@ -207,7 +222,35 @@ inline void PapilioMCPClass::pause() {
 
 inline void PapilioMCPClass::resume() {
   _paused = false;
+  _atBreakpoint = false;
   Serial.println("[MCP] Sketch RESUMED");
+}
+
+inline void PapilioMCPClass::breakpoint(const char* name) {
+  if (!_breakpointsEnabled) return;
+  
+  _breakpointCount++;
+  _atBreakpoint = true;
+  _paused = true;
+  
+  if (name) {
+    Serial.printf("[MCP] BREAKPOINT #%d '%s' - Type C to continue\n", _breakpointCount, name);
+  } else {
+    Serial.printf("[MCP] BREAKPOINT #%d - Type C to continue\n", _breakpointCount);
+  }
+  
+  // Block here until resumed via 'C' command
+  while (_atBreakpoint && _breakpointsEnabled) {
+    update();  // Process MCP commands while at breakpoint
+    delay(10);
+  }
+  
+  _paused = false;
+  if (name) {
+    Serial.printf("[MCP] Continuing from breakpoint '%s'\n", name);
+  } else {
+    Serial.println("[MCP] Continuing from breakpoint");
+  }
 }
 
 inline void PapilioMCPClass::sendResponse(const char* response) {
@@ -308,6 +351,40 @@ inline void PapilioMCPClass::processCommand(String cmd) {
       break;
     }
     
+    case 'C':
+    case 'c': {
+      // Continue from breakpoint
+      if (_atBreakpoint) {
+        _atBreakpoint = false;
+        // resume() will be called when breakpoint() exits its loop
+      } else if (_paused) {
+        resume();
+      } else {
+        sendResponse("OK: Not at breakpoint");
+      }
+      break;
+    }
+    
+    case 'B':
+    case 'b': {
+      if (cmd.length() >= 3) {
+        char action = cmd.charAt(2);
+        if (action == '1') {
+          _breakpointsEnabled = true;
+          Serial.println("[MCP] Breakpoints ENABLED");
+        } else if (action == '0') {
+          _breakpointsEnabled = false;
+          _atBreakpoint = false;  // Release any current breakpoint
+          Serial.println("[MCP] Breakpoints DISABLED - all breakpoints will be skipped");
+        }
+      } else {
+        Serial.printf("Breakpoints: %s (hit %d times)\n", 
+                      _breakpointsEnabled ? "ENABLED" : "disabled",
+                      _breakpointCount);
+      }
+      break;
+    }
+    
     case 'H':
     case 'h':
     case '?': {
@@ -318,10 +395,13 @@ inline void PapilioMCPClass::processCommand(String cmd) {
       sendResponse("D          - Dump debug registers");
       sendResponse("J [1|0]    - Enable/disable JTAG");
       sendResponse("P [1|0]    - Pause/resume sketch");
+      sendResponse("C          - Continue from breakpoint");
+      sendResponse("B [1|0]    - Enable/disable breakpoints");
       sendResponse("H          - This help");
-      Serial.printf("Status: Sketch %s, JTAG %s\n", 
+      Serial.printf("Status: Sketch %s, JTAG %s, Breakpoints %s\n", 
                     _paused ? "PAUSED" : "running",
-                    _jtagEnabled ? "ENABLED" : "disabled");
+                    _jtagEnabled ? "ENABLED" : "disabled",
+                    _breakpointsEnabled ? "ENABLED" : "disabled");
       break;
     }
     
@@ -349,6 +429,10 @@ public:
   void pause() {}
   void resume() {}
   bool isPaused() { return false; }  // Never paused when MCP disabled
+  void breakpoint(const char* name = nullptr) {}  // No-op when disabled
+  void enableBreakpoints() {}
+  void disableBreakpoints() {}
+  bool areBreakpointsEnabled() { return false; }
 };
 
 PapilioMCPClass PapilioMCP;

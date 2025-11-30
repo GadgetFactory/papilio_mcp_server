@@ -518,6 +518,28 @@ def handle_tools_list(request_id):
             }
         },
         {
+            "name": "continue_from_breakpoint",
+            "description": "Continue execution from a breakpoint. Use this when the sketch is stopped at a breakpoint.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {}
+            }
+        },
+        {
+            "name": "set_breakpoints_enabled",
+            "description": "Enable or disable all breakpoints globally. When disabled, breakpoint() calls in the sketch are skipped.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "enabled": {
+                        "type": "boolean",
+                        "description": "True to enable breakpoints, False to disable (skip all breakpoints)"
+                    }
+                },
+                "required": ["enabled"]
+            }
+        },
+        {
             "name": "list_serial_ports",
             "description": "List available serial ports for connecting to the Papilio board.",
             "inputSchema": {
@@ -885,6 +907,21 @@ def handle_tools_call(request_id, params):
             else:
                 result = controller.send_command("P")
                 content = f"Pause status: {result}"
+                
+        elif tool_name == "continue_from_breakpoint":
+            if not controller.connect():
+                content = "ERROR: Not connected to board"
+            else:
+                result = controller.send_command("C")
+                content = f"Continue: {result}"
+                
+        elif tool_name == "set_breakpoints_enabled":
+            enabled = arguments.get("enabled", True)
+            if not controller.connect():
+                content = "ERROR: Not connected to board"
+            else:
+                result = controller.send_command(f"B {1 if enabled else 0}")
+                content = f"Breakpoints {'enabled' if enabled else 'disabled'}: {result}"
             
         elif tool_name == "list_serial_ports":
             ports = serial.tools.list_ports.comports()
