@@ -4,12 +4,38 @@ An MCP (Model Context Protocol) server and debug firmware that allows AI assista
 
 ## Components
 
-This library contains two parts:
+This library contains:
 
 1. **MCP Server** (Python) - Runs on host PC, translates MCP tool calls to serial commands
-2. **Debug Firmware** (Arduino) - Runs on ESP32, handles serial commands and Wishbone bus access
+2. **PapilioMCP.h** (Arduino) - Header-only library to add MCP debug to any sketch
+3. **Example Firmware** - Ready-to-use debug firmware sketches
 
-## Quick Start
+## Quick Start - Adding MCP Debug to Any Sketch
+
+The easiest way to add MCP debug capability is with the header library:
+
+```cpp
+// Add BEFORE setup() - comment out to disable
+#define PAPILIO_MCP_ENABLED
+#include <PapilioMCP.h>
+
+void setup() {
+  Serial.begin(115200);
+  // ... your setup code ...
+  
+  PapilioMCP.begin();  // Initialize MCP (does nothing if disabled)
+}
+
+void loop() {
+  PapilioMCP.update();  // Process MCP commands (does nothing if disabled)
+  
+  // ... your loop code ...
+}
+```
+
+When `PAPILIO_MCP_ENABLED` is NOT defined, `PapilioMCP.begin()` and `PapilioMCP.update()` compile to empty stubs - zero overhead.
+
+## Quick Start - Using the Debug Firmware
 
 ### 1. Upload the Debug Firmware
 
@@ -45,6 +71,22 @@ The `.vscode/mcp.json` should already be configured. If not, add:
 pip install pyserial opencv-python
 ```
 
+## PlatformIO Build Environments
+
+In your `platformio.ini`, you can add MCP debug to any environment via build flags:
+
+```ini
+; Normal build - MCP disabled
+[env:my_project]
+extends = env:papilio_arcade
+
+; Debug build - MCP enabled
+[env:my_project_debug]
+extends = env:papilio_arcade
+build_flags = ${env:papilio_arcade.build_flags}
+              -DPAPILIO_MCP_ENABLED
+```
+
 ## Features
 
 - **RGB LED Control**: Set and read RGB LED colors
@@ -54,31 +96,20 @@ pip install pyserial opencv-python
 - **Screenshot Capture**: Capture webcam images of HDMI output
 - **Video Mode Control**: Switch between test patterns, text mode, and framebuffer
 - **Text Mode**: Write text to 80x26 text display
+- **JTAG Bridge**: Enable USB JTAG passthrough for FPGA programming
 
-## Installation
+## Serial Commands (via PapilioMCP.h)
 
-### Python Dependencies
+| Command | Description |
+|---------|-------------|
+| `H` | Help |
+| `W AAAA DD` | Write DD to Wishbone address AAAA |
+| `R AAAA` | Read from Wishbone address AAAA |
+| `M AAAA NN` | Read NN bytes starting at AAAA |
+| `D` | Dump debug registers |
+| `J [1\|0]` | Enable/disable JTAG bridge |
 
-```bash
-pip install pyserial opencv-python
-```
-
-### VS Code MCP Configuration
-
-Add to your VS Code MCP settings (`.vscode/mcp.json` or user settings):
-
-```json
-{
-  "mcpServers": {
-    "papilio": {
-      "command": "python",
-      "args": ["libs/papilio_mcp_server/server/papilio_mcp_server.py", "--port", "COM4"]
-    }
-  }
-}
-```
-
-## Available Tools
+## Available MCP Tools
 
 ### RGB LED Control
 
@@ -142,8 +173,8 @@ Video modes:
 
 | Address Range | Peripheral |
 |--------------|------------|
-| 0x8000 | Video mode register |
-| 0x8021-0x8024 | Text mode control |
+| 0x8010 | Video mode register |
+| 0x8020-0x802B | Text mode control |
 | 0x8100-0x8103 | RGB LED Controller |
 | 0x0000-0x4B00 | Framebuffer (160x120 RGB332) |
 
@@ -164,9 +195,13 @@ Once the MCP server is configured, you can ask Copilot:
 
 ```
 papilio_mcp_server/
-├── library.json          # PlatformIO library manifest
-├── README.md             # This file
-└── server/
-    ├── papilio_mcp_server.py   # Main MCP server
-    └── screenshots/            # Captured screenshots
+├── library.json           # PlatformIO library manifest
+├── README.md              # This file
+├── src/
+│   └── PapilioMCP.h       # Header-only library for sketches
+├── server/
+│   └── papilio_mcp_server.py  # Main MCP server
+└── examples/
+    ├── mcp_debug_simple/      # Minimal debug firmware
+    └── mcp_debug_firmware_full/  # Full-featured debug firmware
 ```

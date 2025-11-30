@@ -496,6 +496,28 @@ def handle_tools_list(request_id):
             }
         },
         {
+            "name": "pause_sketch",
+            "description": "Pause or resume the main Arduino sketch loop. When paused, only MCP commands are processed.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "paused": {
+                        "type": "boolean",
+                        "description": "True to pause the sketch, False to resume"
+                    }
+                },
+                "required": ["paused"]
+            }
+        },
+        {
+            "name": "get_pause_status",
+            "description": "Get the current pause status of the sketch.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {}
+            }
+        },
+        {
             "name": "list_serial_ports",
             "description": "List available serial ports for connecting to the Papilio board.",
             "inputSchema": {
@@ -848,6 +870,21 @@ def handle_tools_call(request_id, params):
         elif tool_name == "get_fpga_status":
             result = controller.get_debug_dump()
             content = f"FPGA Status:\n{result}"
+            
+        elif tool_name == "pause_sketch":
+            paused = arguments.get("paused", True)
+            if not controller.connect():
+                content = "ERROR: Not connected to board"
+            else:
+                result = controller.send_command(f"P {1 if paused else 0}")
+                content = f"Sketch {'paused' if paused else 'resumed'}: {result}"
+                
+        elif tool_name == "get_pause_status":
+            if not controller.connect():
+                content = "ERROR: Not connected to board"
+            else:
+                result = controller.send_command("P")
+                content = f"Pause status: {result}"
             
         elif tool_name == "list_serial_ports":
             ports = serial.tools.list_ports.comports()
