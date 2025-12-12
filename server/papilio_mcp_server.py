@@ -26,6 +26,7 @@ import argparse
 import base64
 import os
 import time
+from logic_analyzer_tool import LogicAnalyzerTool
 
 # Try to import OpenCV for webcam support
 try:
@@ -390,6 +391,7 @@ class WebcamCapture:
 # Global instances
 controller = PapilioController()
 webcam = WebcamCapture()
+logic_analyzer = None  # Will be initialized when needed
 
 
 def handle_initialize(request_id, params):
@@ -485,6 +487,86 @@ def handle_tools_list(request_id):
                     }
                 },
                 "required": ["address", "data"]
+            }
+        },
+        {
+            "name": "logic_analyzer_status",
+            "description": "Get the status of the FPGA logic analyzer including state, device ID, and capabilities.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {}
+            }
+        },
+        {
+            "name": "logic_analyzer_configure",
+            "description": "Configure the logic analyzer trigger and capture parameters. Trigger mask/value define which signals to trigger on (0 in mask = don't care).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "trigger_mask": {
+                        "type": "integer",
+                        "description": "32-bit trigger mask (0 = don't care, 1 = match). Use 0 for no trigger.",
+                        "default": 0
+                    },
+                    "trigger_value": {
+                        "type": "integer",
+                        "description": "32-bit trigger value to match against masked signals",
+                        "default": 0
+                    },
+                    "samples": {
+                        "type": "integer",
+                        "description": "Number of samples to capture (1-1024)",
+                        "default": 100,
+                        "minimum": 1,
+                        "maximum": 1024
+                    },
+                    "post_trigger": {
+                        "type": "integer",
+                        "description": "Number of samples to capture after trigger (0 = capture before trigger)",
+                        "default": 50,
+                        "minimum": 0
+                    },
+                    "divider": {
+                        "type": "integer",
+                        "description": "Clock divider for sample rate (0 = 27MHz, 1 = 13.5MHz, 26 = 1MHz)",
+                        "default": 0,
+                        "minimum": 0,
+                        "maximum": 255
+                    }
+                }
+            }
+        },
+        {
+            "name": "logic_analyzer_capture",
+            "description": "Arm the logic analyzer and capture data. Returns captured samples as hex strings. Call logic_analyzer_configure first.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "timeout": {
+                        "type": "number",
+                        "description": "Timeout in seconds to wait for capture completion",
+                        "default": 5.0
+                    },
+                    "auto_reset": {
+                        "type": "boolean",
+                        "description": "Automatically reset before arming",
+                        "default": true
+                    }
+                }
+            }
+        },
+        {
+            "name": "logic_analyzer_export_vcd",
+            "description": "Export the last captured data to VCD format for viewing in GTKWave. Must call logic_analyzer_capture first.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "filename": {
+                        "type": "string",
+                        "description": "VCD filename to create",
+                        "default": "capture.vcd"
+                    }
+                }
             }
         },
         {
@@ -863,6 +945,7 @@ def handle_tools_list(request_id):
 
 def handle_tools_call(request_id, params):
     """Handle tools/call request."""
+    global logic_analyzer
     tool_name = params.get("name")
     arguments = params.get("arguments", {})
     
@@ -888,6 +971,68 @@ def handle_tools_call(request_id, params):
             data = arguments.get("data", 0)
             result = controller.wishbone_write(address, data)
             content = f"Write 0x{data:02X} to 0x{address:04X}: {result}"
+            
+        elif tool_name == "logic_analyzer_status":
+            if logic_analyzer is None:
+                logic_analyzer = LogicAnalyzerTool(controller)
+            status = logic_analyzer.get_status()
+            content = f"Logic Analyzer Status:\n"
+            content += f"  State: {status['state_name']} ({status['state']})\n"
+            content += f"  Device ID: {status['device_id']}\n"
+            content += f"  Channels: {status['channels']}\n"
+            content += f"  Memory Depth: {status['depth']} samples"
+            
+        elif tool_name == "logic_analyzer_configure":
+            if logic_analyzer is None:
+                logic_analyzer = LogicAnalyzerTool(controller)
+            trigger_mask = arguments.get("trigger_mask", 0)
+            trigger_value = arguments.get("trigger_value", 0)
+            samples = arguments.get("samples", 100)
+            post_trigger = arguments.get("post_trigger", 50)
+            divider = arguments.get("divider", 0)
+            
+            result = logic_analyzer.configure(trigger_mask, trigger_value, samples, post_trigger, divider)
+            content = f"Logic Analyzer Configured:\n"
+            content += f"  Trigger Mask: {result['trigger_mask']}\n"
+            content += f"  Trigger Value: {result['trigger_value']}\n"
+            content += f"  Samples: {result['samples']}\n"
+            content += f"  Post-Trigger: {result['post_trigger']}\n"
+            content += f"  Divider: {result['divider']}"
+            
+        elif tool_name == "logic_analyzer_capture":
+            if logic_analyzer is None:
+                logic_analyzer = LogicAnalyzerTool(controller)
+            
+            timeout = arguments.get("timeout", 5.0)
+            auto_reset = arguments.get("auto_reset", True)
+            
+            if auto_reset:
+                logic_analyzer.reset()
+                time.sleep(0.01)
+            
+            logic_analyzer.arm()
+            samples = logic_analyzer.capture(timeout)
+            
+            if samples:
+                # Store samples for export
+                logic_analyzer.last_capture = samples
+                content = f"Captured {len(samples)} samples\n"
+                content += f"First 10 samples:\n"
+                for i, sample in enumerate(samples[:10]):
+                    content += f"  Sample {i:3d}: 0x{sample:08X}\n"
+                if len(samples) > 10:
+                    content += f"  ... ({len(samples) - 10} more samples)"
+            else:
+                content = "Capture timeout - no trigger detected or capture failed"
+                
+        elif tool_name == "logic_analyzer_export_vcd":
+            if logic_analyzer is None or not hasattr(logic_analyzer, 'last_capture'):
+                content = "ERROR: No capture data available. Run logic_analyzer_capture first."
+            else:
+                filename = arguments.get("filename", "capture.vcd")
+                result = logic_analyzer.export_vcd(logic_analyzer.last_capture, filename)
+                content = f"Exported {result['samples']} samples to {result['filename']}\n"
+                content += f"View with: gtkwave {result['filename']}"
             
         elif tool_name == "get_fpga_status":
             result = controller.get_debug_dump()
