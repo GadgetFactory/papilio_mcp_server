@@ -550,7 +550,7 @@ def handle_tools_list(request_id):
                     "auto_reset": {
                         "type": "boolean",
                         "description": "Automatically reset before arming",
-                        "default": true
+                        "default": True
                     }
                 }
             }
@@ -565,6 +565,39 @@ def handle_tools_list(request_id):
                         "type": "string",
                         "description": "VCD filename to create",
                         "default": "capture.vcd"
+                    }
+                }
+            }
+        },
+        {
+            "name": "logic_analyzer_decode_wb_data",
+            "description": "Decode captured samples as Wishbone data bus values (wb_dat_o[7:0]). Returns decoded samples with hex values.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {}
+            }
+        },
+        {
+            "name": "logic_analyzer_analyze_wb",
+            "description": "Analyze captured Wishbone data samples with context around trigger point. Shows statistics and most common values.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "trigger_value": {
+                        "type": "integer",
+                        "description": "The trigger byte value to find (0-255). If not specified, analyzes from start.",
+                        "minimum": 0,
+                        "maximum": 255
+                    },
+                    "context_before": {
+                        "type": "integer",
+                        "description": "Number of samples to show before trigger",
+                        "default": 10
+                    },
+                    "context_after": {
+                        "type": "integer",
+                        "description": "Number of samples to show after trigger",
+                        "default": 20
                     }
                 }
             }
@@ -1007,8 +1040,9 @@ def handle_tools_call(request_id, params):
             auto_reset = arguments.get("auto_reset", True)
             
             if auto_reset:
+                import time as time_module
                 logic_analyzer.reset()
-                time.sleep(0.01)
+                time_module.sleep(0.01)
             
             logic_analyzer.arm()
             samples = logic_analyzer.capture(timeout)
@@ -1016,12 +1050,40 @@ def handle_tools_call(request_id, params):
             if samples:
                 # Store samples for export
                 logic_analyzer.last_capture = samples
-                content = f"Captured {len(samples)} samples\n"
-                content += f"First 10 samples:\n"
-                for i, sample in enumerate(samples[:10]):
-                    content += f"  Sample {i:3d}: 0x{sample:08X}\n"
-                if len(samples) > 10:
-                    content += f"  ... ({len(samples) - 10} more samples)"
+                content = f"Captured {len(samples)} samples\n\n"
+                
+                # Decode and display samples
+                def decode_sample(s):
+                    return {
+                        'wb_dat': (s >> 24) & 0xFF,
+                        'wb_cyc': (s >> 23) & 1,
+                        'wb_stb': (s >> 22) & 1,
+                        'wb_we': (s >> 21) & 1,
+                        'wb_ack': (s >> 20) & 1,
+                        'rgb_sel': (s >> 19) & 1,
+                        'wb_adr': (s >> 8) & 0xFF,
+                    }
+                
+                # Find Wishbone transactions
+                transactions = []
+                for i, sample in enumerate(samples):
+                    d = decode_sample(sample)
+                    if d['wb_stb']:
+                        transactions.append((i, d))
+                
+                if transactions:
+                    content += f"Found {len(transactions)} Wishbone transaction(s):\n"
+                    for idx, d in transactions[:20]:
+                        op = "WR" if d['wb_we'] else "RD"
+                        peripheral = "RGB_LED" if d['rgb_sel'] else "OTHER"
+                        content += f"  Sample {idx:3d}: {op} {peripheral} addr=0x{d['wb_adr']:02X} data=0x{d['wb_dat']:02X} ack={d['wb_ack']}\n"
+                    if len(transactions) > 20:
+                        content += f"  ... and {len(transactions) - 20} more transactions\n"
+                else:
+                    content += "No Wishbone transactions detected\n"
+                    content += "\nFirst 10 samples (raw):\n"
+                    for i, sample in enumerate(samples[:10]):
+                        content += f"  Sample {i:3d}: 0x{sample:08X}\n"
             else:
                 content = "Capture timeout - no trigger detected or capture failed"
                 
@@ -1033,6 +1095,69 @@ def handle_tools_call(request_id, params):
                 result = logic_analyzer.export_vcd(logic_analyzer.last_capture, filename)
                 content = f"Exported {result['samples']} samples to {result['filename']}\n"
                 content += f"View with: gtkwave {result['filename']}"
+        
+        elif tool_name == "logic_analyzer_decode_wb_data":
+            if logic_analyzer is None or not hasattr(logic_analyzer, 'last_capture'):
+                content = "ERROR: No capture data available. Run logic_analyzer_capture first."
+            else:
+                decoded = logic_analyzer.decode_wb_data_samples(logic_analyzer.last_capture)
+                content = "Decoded Wishbone Data Bus (wb_dat_o[7:0]):\n\n"
+                content += f"Total samples: {len(decoded)}\n\n"
+                
+                # Show first 50 samples
+                for item in decoded[:50]:
+                    content += f"Sample {item['index']:4d}: 0x{item['value']:02X} ({item['value']:3d})\n"
+                
+                if len(decoded) > 50:
+                    content += f"\n... ({len(decoded) - 50} more samples)\n"
+                    
+                # Show unique values
+                unique_vals = set(s['value'] for s in decoded)
+                content += f"\nUnique values: {len(unique_vals)}\n"
+                if len(unique_vals) <= 20:
+                    content += "Values: " + ", ".join(f"0x{v:02X}" for v in sorted(unique_vals))
+        
+        elif tool_name == "logic_analyzer_analyze_wb":
+            if logic_analyzer is None or not hasattr(logic_analyzer, 'last_capture'):
+                content = "ERROR: No capture data available. Run logic_analyzer_capture first."
+            else:
+                trigger_value = arguments.get("trigger_value")
+                context_before = arguments.get("context_before", 10)
+                context_after = arguments.get("context_after", 20)
+                
+                result = logic_analyzer.analyze_wb_transactions(
+                    logic_analyzer.last_capture,
+                    trigger_value=trigger_value,
+                    context_before=context_before,
+                    context_after=context_after
+                )
+                
+                content = "Wishbone Transaction Analysis:\n\n"
+                content += f"Total samples: {result['total_samples']}\n"
+                content += f"Capture duration: {result['capture_duration_us']:.1f} µs\n"
+                content += f"Sample rate: {result['sample_rate_mhz']} MHz\n"
+                content += f"Unique values: {result['unique_count']}\n\n"
+                
+                if result['trigger_index'] is not None:
+                    content += f"Trigger found at sample {result['trigger_index']} (value: 0x{trigger_value:02X})\n\n"
+                    
+                    # Show context window
+                    content += "Context Window:\n"
+                    for item in result['context_samples']:
+                        prefix = ">>> " if item['index'] == result['trigger_index'] else "    "
+                        content += f"{prefix}Sample {item['index']:4d}: 0x{item['value']:02X} ({item['value']:3d})\n"
+                else:
+                    if trigger_value is not None:
+                        content += f"Trigger value 0x{trigger_value:02X} not found in capture\n"
+                    content += "\nFirst 30 samples:\n"
+                    for item in result['context_samples'][:30]:
+                        content += f"    Sample {item['index']:4d}: 0x{item['value']:02X} ({item['value']:3d})\n"
+                
+                # Show most common values
+                content += "\nMost common values:\n"
+                for val, count in result['most_common'][:10]:
+                    pct = (count / result['total_samples']) * 100
+                    content += f"  0x{val:02X}: {count:4d} times ({pct:5.1f}%)\n"
             
         elif tool_name == "get_fpga_status":
             result = controller.get_debug_dump()
